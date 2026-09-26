@@ -8,13 +8,16 @@
  *     单成员分量），分量自上而下堆叠、之间留白 GAP_COMPONENT；
  *   - 每个分量内部按「最长父母链」分层：没有父母的成员在第 0 层，其余成员的层号
  *     = 其直接父母的最大层号 + 1（父母必与自己同分量；家谱是 DAG，记忆化 DFS 收敛）；
- *   - 层内排序：第 0 层（没有父母的层）按姓名、成员 ID 稳定排序；其余层自上而下
- *     处理，按各成员「直接父母节点横坐标的重心（平均值）」升序，平局按姓名、成员 ID
- *     稳定排序——处理到某层时其父母所在层的坐标已经确定；
+ *   - 层内排序：先按各层成员与节点宽度算出各层实际宽度（层宽与层内次序无关），
+ *     分量宽度取各层最大值，从而确定每层的居中偏移；第 0 层（没有父母的层）
+ *     按姓名、成员 ID 稳定排序；其余层自上而下处理，按各成员「直接父母节点
+ *     最终横坐标（已含父母所在层的居中偏移）的重心（平均值）」升序，平局按姓名、
+ *     成员 ID 稳定排序——处理到某层时其父母所在层（层号严格更小）的最终坐标
+ *     已经确定，因此同层子女的左右次序与图上最终父母重心的左右次序一致；
  *   - 同一成员无论被几位父母指向都只布局一个节点，每条父母→子女关系各保留一条连线；
  *   - 节点宽度按姓名估计（全角字符按 CHAR_W_WIDE、其余按 CHAR_W_NARROW），同层节点
- *     从左到右依次排开并保留最小间距 GAP_X，各层在分量宽度内水平居中，
- *     节点与姓名互不重叠。
+ *     从本层居中偏移处起从左到右依次排开并保留最小间距 GAP_X，各层在分量宽度内
+ *     水平居中，节点与姓名互不重叠。
  *
  * 坐标系：x 向右、y 向下，节点的 (x, y) 为中心点；画布顶部保留 HEADER_H 高度，
  * 由 caption 给出「生成时的家谱版本」标注位置与文本（version 仅用于组成标注文本
@@ -133,7 +136,7 @@ function layoutFamilyChart(state, version = 0) {
 
   const byNameThenId = compareByNameThenId(nameOf);
 
-  // 2) 逐分量：最长父母链分层 → 层内排序 → 横坐标
+  // 2) 逐分量：最长父母链分层 → 各层宽度与居中偏移 → 按最终父母横坐标排序放置
   const components = [];
   for (const ids of compIds.values()) {
     // 最长父母链分层：无父母为第 0 层，否则为父母最大层号 + 1（DAG 保证收敛）
@@ -156,12 +159,28 @@ function layoutFamilyChart(state, version = 0) {
       layers.get(layer).push(id);
     }
 
-    // 层内排序与横坐标：第 0 层（没有父母的层）按姓名、ID；其余层自上而下，
-    // 按直接父母横坐标重心升序，平局按姓名、ID（父母所在层坐标已确定）
-    const xOf = new Map();
+    // 先确定各层实际宽度与居中偏移：层宽只取决于层内成员及节点宽度
+    // （宽度之和 + 相邻节点最小间距 GAP_X），与层内次序无关，可在排序前一次算清；
+    // 分量宽度取各层最大值，每层居中偏移 = (分量宽度 - 层宽) / 2
     const widthOf = new Map(ids.map((id) => [id, nodeWidth(nameOf.get(id))]));
     const layerWidths = new Map();
     let compWidth = 0;
+    for (let layer = 0; layer <= maxLayer; layer += 1) {
+      const idsInLayer = layers.get(layer);
+      const width =
+        idsInLayer.reduce((acc, id) => acc + widthOf.get(id), 0) +
+        GAP_X * (idsInLayer.length - 1);
+      layerWidths.set(layer, width);
+      compWidth = Math.max(compWidth, width);
+    }
+    const layerOffsetOf = (layer) => (compWidth - layerWidths.get(layer)) / 2;
+
+    // 层内排序与横坐标：第 0 层（没有父母的层）按姓名、ID；其余层自上而下，
+    // 按直接父母「最终横坐标」（已含父母所在层的居中偏移）的重心升序，平局按
+    // 姓名、ID。父母所在层号严格更小、先行处理，其最终坐标已经确定；本层节点
+    // 从居中偏移处起排，直接得到最终横坐标——因此同层子女的左右次序与图上
+    // 最终父母重心的左右次序一致（不会出现居中后次序反转）
+    const xOf = new Map();
     for (let layer = 0; layer <= maxLayer; layer += 1) {
       const idsInLayer = layers.get(layer);
       let sorted;
@@ -181,21 +200,12 @@ function layoutFamilyChart(state, version = 0) {
           return byNameThenId(a, b);
         });
       }
-      let cursor = 0;
+      let cursor = layerOffsetOf(layer);
       for (const id of sorted) {
         xOf.set(id, cursor + widthOf.get(id) / 2);
         cursor += widthOf.get(id) + GAP_X;
       }
-      const layerWidth = cursor - GAP_X;
-      layerWidths.set(layer, layerWidth);
-      compWidth = Math.max(compWidth, layerWidth);
       layers.set(layer, sorted);
-    }
-
-    // 各层在分量宽度内水平居中（层内相对间距不变）
-    for (let layer = 0; layer <= maxLayer; layer += 1) {
-      const dx = (compWidth - layerWidths.get(layer)) / 2;
-      for (const id of layers.get(layer)) xOf.set(id, xOf.get(id) + dx);
     }
 
     components.push({

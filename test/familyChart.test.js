@@ -146,6 +146,66 @@ test('整谱关系图：重心与姓名都平局时按成员 ID 稳定排序', (
   assert.ok(nodeOf(r, 'id-a').x < nodeOf(r, 'id-b').x);
 });
 
+test('整谱关系图：父母分属不同层时按最终父母横坐标排序（居中后次序不反转）', () => {
+  // 回归：A→B、A→D、A→C、B→C、B→E。第 0 层只有 A，各层居中后 A 相对 B 右移；
+  // C 的父母为 A、B，E 的父母为 B，按最终横坐标 E 的重心（B）在 C 的重心
+  // （A、B 均值）左侧，E 应排在 C 左侧。旧实现用各层居中前的横坐标计算重心，
+  // 两者相等退化为按姓名排序得到 C 在 E 左侧，与最终父母重心次序相反。
+  const state = makeState(['A', 'B', 'C', 'D', 'E']);
+  add(state, 'A', 'B');
+  add(state, 'A', 'D');
+  add(state, 'A', 'C');
+  add(state, 'B', 'C');
+  add(state, 'B', 'E');
+  const r = layoutFamilyChart(state, 1);
+  assert.equal(r.componentCount, 1);
+  assert.equal(r.nodes.length, 5);
+  assert.equal(r.edges.length, 5, '多父母关系的全部连线都应保留');
+  assert.equal(r.nodes.filter((n) => n.id === 'C').length, 1, '多父母子女只绘一个节点');
+  const xOf = (id) => nodeOf(r, id).x;
+  const baryC = (xOf('A') + xOf('B')) / 2;
+  const baryE = xOf('B');
+  assert.ok(baryE < baryC, '前提：E 的最终父母重心应在 C 左侧');
+  assert.ok(xOf('E') < xOf('C'), '同层子女次序应与最终父母重心次序一致');
+});
+
+test('整谱关系图：任意层的节点次序都与最终父母重心（平局按姓名、ID）一致', () => {
+  // 混合结构：钻石（多父母）+ 跨层边 + 不同层宽，检验一般情形下的不变量
+  const state = makeState(['R', 'S', 'A', 'B', 'C', 'D', 'E']);
+  add(state, 'R', 'A');
+  add(state, 'S', 'B');
+  add(state, 'R', 'C');
+  add(state, 'A', 'D');
+  add(state, 'B', 'D');
+  add(state, 'C', 'D');
+  add(state, 'D', 'E');
+  add(state, 'R', 'E'); // 跨层边：R(0) → E(3)
+  const r = layoutFamilyChart(state, 1);
+  const byId = new Map(r.nodes.map((n) => [n.id, n]));
+  const nameOf = new Map(state.members.map((m) => [m.id, m.name]));
+  const maxLayer = Math.max(...r.nodes.map((n) => n.layer));
+  for (let layer = 1; layer <= maxLayer; layer += 1) {
+    const inLayer = r.nodes.filter((n) => n.layer === layer);
+    const bary = (n) => {
+      const ps = state.parentsOf[n.id];
+      return ps.reduce((acc, p) => acc + byId.get(p).x, 0) / ps.length;
+    };
+    const expected = [...inLayer].sort((a, b) => {
+      const diff = bary(a) - bary(b);
+      if (diff !== 0) return diff;
+      const byName = nameOf.get(a.id).localeCompare(nameOf.get(b.id), 'zh');
+      if (byName !== 0) return byName;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+    const actual = [...inLayer].sort((a, b) => a.x - b.x);
+    assert.deepEqual(
+      actual.map((n) => n.id),
+      expected.map((n) => n.id),
+      `第 ${layer} 层节点次序应与最终父母重心排序一致`,
+    );
+  }
+});
+
 test('整谱关系图：没有父母的层按姓名、ID 排序', () => {
   const state = makeState(['C', 'A', 'B', 'K1', 'K2']);
   add(state, 'C', 'K1');
