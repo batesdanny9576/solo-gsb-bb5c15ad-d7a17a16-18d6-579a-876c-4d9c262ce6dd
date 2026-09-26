@@ -8,9 +8,12 @@
  *     单成员分量），分量自上而下堆叠、之间留白 GAP_COMPONENT；
  *   - 每个分量内部按「最长父母链」分层：没有父母的成员在第 0 层，其余成员的层号
  *     = 其直接父母的最大层号 + 1（父母必与自己同分量；家谱是 DAG，记忆化 DFS 收敛）；
- *   - 层内排序：第 0 层（没有父母的层）按姓名、成员 ID 稳定排序；其余层自上而下
- *     处理，按各成员「直接父母节点横坐标的重心（平均值）」升序，平局按姓名、成员 ID
- *     稳定排序——处理到某层时其父母所在层的坐标已经确定；
+ *   - 层内排序：先按各层成员与节点宽度求出每层的实际宽度（与层内次序无关），
+ *     从而确定分量宽度与各层的居中偏移；再自上而下逐层排序放置——第 0 层
+ *     （没有父母的层）按姓名、成员 ID 稳定排序，其余层按各成员「直接父母节点
+ *     最终横坐标（已含所在层居中偏移）的重心（平均值）」升序，平局按姓名、
+ *     成员 ID 稳定排序——父母必在更浅的层，处理到某层时其父母的最终坐标
+ *     已经确定，因此父母分属不同层时重心次序与图中最终次序一致；
  *   - 同一成员无论被几位父母指向都只布局一个节点，每条父母→子女关系各保留一条连线；
  *   - 节点宽度按姓名估计（全角字符按 CHAR_W_WIDE、其余按 CHAR_W_NARROW），同层节点
  *     从左到右依次排开并保留最小间距 GAP_X，各层在分量宽度内水平居中，
@@ -156,12 +159,24 @@ function layoutFamilyChart(state, version = 0) {
       layers.get(layer).push(id);
     }
 
-    // 层内排序与横坐标：第 0 层（没有父母的层）按姓名、ID；其余层自上而下，
-    // 按直接父母横坐标重心升序，平局按姓名、ID（父母所在层坐标已确定）
+    // 层内排序与横坐标，分两步：
+    // 第一步先求各层实际宽度（层宽 = 节点宽度之和 + 最小间距，与层内次序无关），
+    // 从而确定分量宽度与每层的居中偏移；第二步再自上而下逐层排序放置——
+    // 第 0 层（没有父母的层）按姓名、ID；其余层按直接父母「最终横坐标」
+    // （父母所在层已按各自居中偏移放置完毕）的重心升序，平局按姓名、ID。
+    // 若先排序再居中，父母分属不同层时各层居中偏移不同，会使子女的最终
+    // 父母重心次序与放置次序相反（如 A→B、A→D、A→C、B→C、B→E 中的 C 与 E）。
     const xOf = new Map();
     const widthOf = new Map(ids.map((id) => [id, nodeWidth(nameOf.get(id))]));
     const layerWidths = new Map();
     let compWidth = 0;
+    for (let layer = 0; layer <= maxLayer; layer += 1) {
+      const idsInLayer = layers.get(layer);
+      let layerWidth = GAP_X * (idsInLayer.length - 1);
+      for (const id of idsInLayer) layerWidth += widthOf.get(id);
+      layerWidths.set(layer, layerWidth);
+      compWidth = Math.max(compWidth, layerWidth);
+    }
     for (let layer = 0; layer <= maxLayer; layer += 1) {
       const idsInLayer = layers.get(layer);
       let sorted;
@@ -181,21 +196,13 @@ function layoutFamilyChart(state, version = 0) {
           return byNameThenId(a, b);
         });
       }
-      let cursor = 0;
+      // 本层在分量宽度内水平居中：从居中偏移处起从左到右依次排开
+      let cursor = (compWidth - layerWidths.get(layer)) / 2;
       for (const id of sorted) {
         xOf.set(id, cursor + widthOf.get(id) / 2);
         cursor += widthOf.get(id) + GAP_X;
       }
-      const layerWidth = cursor - GAP_X;
-      layerWidths.set(layer, layerWidth);
-      compWidth = Math.max(compWidth, layerWidth);
       layers.set(layer, sorted);
-    }
-
-    // 各层在分量宽度内水平居中（层内相对间距不变）
-    for (let layer = 0; layer <= maxLayer; layer += 1) {
-      const dx = (compWidth - layerWidths.get(layer)) / 2;
-      for (const id of layers.get(layer)) xOf.set(id, xOf.get(id) + dx);
     }
 
     components.push({

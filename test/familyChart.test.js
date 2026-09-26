@@ -146,6 +146,31 @@ test('整谱关系图：重心与姓名都平局时按成员 ID 稳定排序', (
   assert.ok(nodeOf(r, 'id-a').x < nodeOf(r, 'id-b').x);
 });
 
+test('整谱关系图：父母分属不同层时按最终（居中后）父母横坐标重心排序', () => {
+  // A→B、A→D、A→C、B→C、B→E：C 的父母 A（第 0 层）与 B（第 1 层）分属不同层。
+  // 各层居中后第 0 层的 A 右移，C 的最终父母重心 (x(A)+x(B))/2 落在 E 的父母
+  // 重心 x(B) 右侧，因此 E 应排在 C 左侧；若用居中前的横坐标计算重心，
+  // 两者重心平局会按姓名把 C 放到 E 左侧，与最终父母重心次序相反。
+  const state = makeState(['A', 'B', 'C', 'D', 'E']);
+  add(state, 'A', 'B');
+  add(state, 'A', 'D');
+  add(state, 'A', 'C');
+  add(state, 'B', 'C');
+  add(state, 'B', 'E');
+  const r = layoutFamilyChart(state, 1);
+  assert.equal(r.componentCount, 1);
+  assert.equal(nodeOf(r, 'C').layer, 2);
+  assert.equal(nodeOf(r, 'E').layer, 2);
+  const x = (id) => nodeOf(r, id).x;
+  const baryC = (x('A') + x('B')) / 2;
+  const baryE = x('B');
+  assert.ok(baryE < baryC, '各层居中后 E 的父母重心应在 C 的父母重心左侧');
+  assert.ok(x('E') < x('C'), '同层子女应按最终父母重心次序放置：E 在 C 左侧');
+  // 多父母关系仍只布局一个子女节点并保留全部连线
+  assert.equal(r.nodes.filter((n) => n.id === 'C').length, 1, 'C 有两位父母但只绘一个节点');
+  assert.equal(r.edges.length, 5);
+});
+
 test('整谱关系图：没有父母的层按姓名、ID 排序', () => {
   const state = makeState(['C', 'A', 'B', 'K1', 'K2']);
   add(state, 'C', 'K1');
